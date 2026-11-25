@@ -91,4 +91,25 @@ module uart #(
             baud_clk_cnt <= baud_clk_cnt + 16'd1;
     end
 
+    // TX oversampling tick counter
+    // TODO: compensate TX start phase relative to the free-running baud counter.
+    reg [3:0] tx_tick_cnt;
+    wire tx_bit_tick;
+
+    assign tx_bit_tick = rst_n
+                      && tx_busy
+                      && baud_tick
+                      && (tx_tick_cnt == 4'd15);
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            tx_tick_cnt <= 4'd0;
+        else if (tx_start)
+            tx_tick_cnt <= 4'd0;
+        else if (tx_bit_tick)
+            tx_tick_cnt <= 4'd0;
+        else if (tx_busy && baud_tick)
+            tx_tick_cnt <= tx_tick_cnt + 4'd1;
+    end
+
 endmodule
