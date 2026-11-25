@@ -54,4 +54,41 @@ module uart #(
         end
     end
 
+    // Baud rate configuration
+    localparam DIV_RESET = CLK_FREQ / (16 * BAUD);
+
+    reg [15:0] baud_divisor;
+    reg [15:0] baud_clk_cnt;
+
+    wire div_write;
+    wire baud_tick;
+
+    assign div_write = rst_n
+                    && wen
+                    && (addr == 4'hC)
+                    && !tx_busy
+                    && !tx_full
+                    && (wdata[15:0] != 16'd0);
+
+    assign baud_tick = (baud_clk_cnt == baud_divisor - 16'd1);
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            baud_divisor <= DIV_RESET[15:0];
+        else if (div_write)
+            baud_divisor <= wdata[15:0];
+    end
+
+    // Free-running baud rate counter (B1)
+    // TODO: coordinate counter phase with accepted DIV writes.
+    // TODO: define baud_tick behavior during reset.
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            baud_clk_cnt <= 16'd0;
+        else if (baud_tick)
+            baud_clk_cnt <= 16'd0;
+        else
+            baud_clk_cnt <= baud_clk_cnt + 16'd1;
+    end
+
 endmodule
