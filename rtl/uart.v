@@ -33,8 +33,8 @@ module uart #(
     // TX control events
     wire tx_push;
     wire tx_start;
-    wire tx_step;  // TODO: bit timing
-    wire tx_done;  // TODO: frame completion
+    wire tx_step;
+    wire tx_done;
 
     assign tx_push  = rst_n && wen && !tx_full && (addr == 4'h0);
     assign tx_start = rst_n && tx_full && !tx_busy;
@@ -123,5 +123,43 @@ module uart #(
         else if (tx_busy && tx_baud_tick)
             tx_tick_cnt <= tx_tick_cnt + 4'd1;
     end
+
+    // TX frame bit index
+    reg [3:0] tx_bit_idx;
+
+    assign tx_step = tx_bit_tick && (tx_bit_idx != 4'd9);
+    assign tx_done = tx_bit_tick && (tx_bit_idx == 4'd9);
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            tx_bit_idx <= 4'd0;
+        else if (tx_start || tx_done)
+            tx_bit_idx <= 4'd0;
+        else if (tx_step)
+            tx_bit_idx <= tx_bit_idx + 4'd1;
+    end
+
+    // TX shift register (8N1, LSB first)
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            tx_shift <= 10'b1111111111;
+        else if (tx_start)
+            tx_shift <= {1'b1, tx_buf, 1'b0};
+        else if (tx_step)
+            tx_shift <= {1'b1, tx_shift[9:1]};
+    end
+
+    // TX busy status
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            tx_busy <= 1'b0;
+        else if (tx_start)
+            tx_busy <= 1'b1;
+        else if (tx_done)
+            tx_busy <= 1'b0;
+    end
+
+    // TX serial output
+    assign txd = tx_shift[0];
 
 endmodule
