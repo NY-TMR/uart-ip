@@ -80,12 +80,12 @@ module uart #(
     end
 
     // Free-running baud rate counter (B1)
-    // TODO: coordinate counter phase with accepted DIV writes.
-    // TODO: define baud_tick behavior during reset.
+    // Restart the counter when a DIV write is accepted.
+    // baud_tick is a terminal-count condition, independent of reset.
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
             baud_clk_cnt <= 16'd0;
-        else if (baud_tick)
+        else if (div_write || baud_tick)
             baud_clk_cnt <= 16'd0;
         else
             baud_clk_cnt <= baud_clk_cnt + 16'd1;
@@ -161,5 +161,17 @@ module uart #(
 
     // TX serial output
     assign txd = tx_shift[0];
+
+    // MMIO combinational readback (independent of ren)
+    // RX data and status fields are placeholders until RX is implemented.
+    always @(*) begin
+        case (addr)
+            4'h0:    rdata = {31'd0, tx_full};
+            4'h4:    rdata = 32'd0;
+            4'h8:    rdata = {30'd0, tx_busy, tx_full};
+            4'hC:    rdata = {16'd0, baud_divisor};
+            default: rdata = 32'd0;
+        endcase
+    end
 
 endmodule
