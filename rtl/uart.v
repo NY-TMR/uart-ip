@@ -339,15 +339,19 @@ module uart #(
     end
 
     // MMIO combinational readback (independent of ren)
-    // RX data and status fields are placeholders until RX is implemented.
+    // Preserve legacy field positions; expose lost-byte count in reserved bits.
     always @(*) begin
         case (addr)
             4'h0:    rdata = {31'd0, tx_full};
-            4'h4:    rdata = 32'd0;
-            4'h8:    rdata = {30'd0, tx_busy, tx_full};
+            4'h4:    rdata = {20'd0, rx_lost_cnt, rx_full, rx_buf};
+            4'h8:    rdata = {25'd0, rx_lost_cnt, (rx_lost_cnt != 3'd0),
+                              rx_full, tx_busy, tx_full};
             4'hC:    rdata = {16'd0, baud_divisor};
             default: rdata = 32'd0;
         endcase
     end
+
+    // RX level interrupt: asserted while unread data is available.
+    assign irq = rx_full;
 
 endmodule
