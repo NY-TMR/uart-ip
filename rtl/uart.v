@@ -22,6 +22,19 @@ module uart #(
     output wire        irq
 );
 
+    // RX state definitions (two-process FSM; transitions pending)
+    localparam RX_IDLE  = 2'd0;
+    localparam RX_START = 2'd1;
+    localparam RX_DATA  = 2'd2;
+    localparam RX_STOP  = 2'd3;
+
+    reg [1:0] rx_state;
+    reg [1:0] rx_next_state;
+
+    // RX asynchronous input synchronizer
+    reg rxd_meta;
+    reg rxd_sync;
+
     // TX data path
     reg [7:0] tx_buf;
     reg [9:0] tx_shift;
@@ -68,6 +81,8 @@ module uart #(
                     && (addr == 4'hC)
                     && !tx_busy
                     && !tx_full
+                    && (rx_state == RX_IDLE)
+                    && rxd_sync
                     && (wdata[15:0] != 16'd0);
 
     assign baud_tick = (baud_clk_cnt == baud_divisor - 16'd1);
@@ -161,6 +176,72 @@ module uart #(
 
     // TX serial output
     assign txd = tx_shift[0];
+
+    // RX input synchronization (idle line is high)
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rxd_meta <= 1'b1;
+            rxd_sync <= 1'b1;
+        end
+        else begin
+            rxd_meta <= rxd;
+            rxd_sync <= rxd_meta;
+        end
+    end
+
+    // RX FSM skeleton: hold state until transition logic is implemented.
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            rx_state <= RX_IDLE;
+        else
+            rx_state <= rx_next_state;
+    end
+
+    always @(*) begin
+        rx_next_state = rx_state;
+        // TODO: implement RX state transitions after bit-index design.
+    end
+
+    // RX start event and phase capture
+    reg [15:0] rx_start_phase;
+    wire rx_start;
+    wire rx_baud_tick;
+
+    assign rx_start = rst_n && !rxd_sync
+                            && (rx_state == RX_IDLE);
+    assign rx_baud_tick = (baud_clk_cnt == rx_start_phase);
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            rx_start_phase <= 16'd0;
+        else if (rx_start)
+            rx_start_phase <= baud_clk_cnt;
+    end
+
+    // RX oversampling tick counter and center-sampling events
+    reg [3:0] rx_tick_cnt;
+    wire rx_half_tick;
+    wire rx_bit_tick;
+
+    assign rx_half_tick = rst_n
+                        && rx_baud_tick
+                        && (rx_tick_cnt == 4'd7)
+                        && (rx_state == RX_START);
+
+    assign rx_bit_tick = rst_n
+                       && rx_baud_tick
+                       && (rx_tick_cnt == 4'd15)
+                       && ((rx_state == RX_DATA)
+                        || (rx_state == RX_STOP));
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            rx_tick_cnt <= 4'd0;
+        else if (rx_start || rx_half_tick || rx_bit_tick)
+            rx_tick_cnt <= 4'd0;
+        else if ((rx_state != RX_IDLE) && rx_baud_tick)
+            rx_tick_cnt <= rx_tick_cnt + 4'd1;
+    end
 
     // MMIO combinational readback (independent of ren)
     // RX data and status fields are placeholders until RX is implemented.
