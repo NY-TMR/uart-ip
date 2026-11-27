@@ -22,7 +22,7 @@ module uart #(
     output wire        irq
 );
 
-    // RX state definitions (two-process FSM; transitions pending)
+    // RX state definitions (two-process FSM)
     localparam RX_IDLE  = 2'd0;
     localparam RX_START = 2'd1;
     localparam RX_DATA  = 2'd2;
@@ -30,6 +30,7 @@ module uart #(
 
     reg [1:0] rx_state;
     reg [1:0] rx_next_state;
+    reg [2:0] rx_bit_idx;
 
     // RX asynchronous input synchronizer
     reg rxd_meta;
@@ -189,7 +190,7 @@ module uart #(
         end
     end
 
-    // RX FSM skeleton: hold state until transition logic is implemented.
+    // RX FSM state register and next-state logic
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
             rx_state <= RX_IDLE;
@@ -199,7 +200,30 @@ module uart #(
 
     always @(*) begin
         rx_next_state = rx_state;
-        // TODO: implement RX state transitions after bit-index design.
+
+        case (rx_state)
+            RX_IDLE: begin
+                if (rx_start)
+                    rx_next_state = RX_START;
+            end
+            RX_START: begin
+                if (rx_half_tick && rxd_sync)
+                    rx_next_state = RX_IDLE;
+                else if (rx_half_tick && !rxd_sync)
+                    rx_next_state = RX_DATA;
+            end
+            RX_DATA: begin
+                if (rx_bit_tick && (rx_bit_idx == 3'd7))
+                    rx_next_state = RX_STOP;
+            end
+            RX_STOP: begin
+                if (rx_bit_tick)
+                    rx_next_state = RX_IDLE;
+            end
+            default: begin
+                rx_next_state = RX_IDLE;
+            end
+        endcase
     end
 
     // RX start event and phase capture
@@ -241,6 +265,77 @@ module uart #(
             rx_tick_cnt <= 4'd0;
         else if ((rx_state != RX_IDLE) && rx_baud_tick)
             rx_tick_cnt <= rx_tick_cnt + 4'd1;
+    end
+
+    // RX data-bit index
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            rx_bit_idx <= 3'd0;
+        else if (rx_state == RX_STOP)
+            rx_bit_idx <= 3'd0;
+        else if (rx_bit_tick && (rx_state == RX_DATA))
+            rx_bit_idx <= rx_bit_idx + 3'd1;
+    end
+
+    // RX serial-to-parallel conversion (8N1, LSB first)
+    reg [7:0] rx_shift;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            rx_shift <= 8'b0;
+        else if ((rx_state == RX_DATA) && rx_bit_tick)
+            rx_shift <= {rxd_sync, rx_shift[7:1]};
+    end
+
+    // RX buffer and status
+    reg [7:0] rx_buf;
+    reg       rx_full;
+    reg [2:0] rx_lost_cnt;
+
+    // RX buffer control events
+    wire rx_frame_valid;
+    wire rx_pop;
+    wire rx_overrun;
+
+    assign rx_frame_valid = (rx_state == RX_STOP)
+                         && rx_bit_tick
+                         && rxd_sync;
+
+    assign rx_pop = rst_n
+                 && ren
+                 && (addr == 4'h4)
+                 && rx_full;
+
+    assign rx_overrun = rx_frame_valid
+                     && rx_full
+                     && !rx_pop;
+
+    // RX buffer: Overwrite Old
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            rx_buf <= 8'd0;
+        else if (rx_frame_valid)
+            rx_buf <= rx_shift;
+    end
+
+    // RX buffer valid status
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            rx_full <= 1'b0;
+        else if (rx_frame_valid)
+            rx_full <= 1'b1;
+        else if (rx_pop)
+            rx_full <= 1'b0;
+    end
+
+    // RX lost-byte counter (saturating)
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            rx_lost_cnt <= 3'd0;
+        else if (rx_pop)
+            rx_lost_cnt <= 3'd0;
+        else if (rx_overrun && (rx_lost_cnt != 3'd7))
+            rx_lost_cnt <= rx_lost_cnt + 3'd1;
     end
 
     // MMIO combinational readback (independent of ren)
